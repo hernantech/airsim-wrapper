@@ -1,4 +1,4 @@
-from base_controller import BaseDroneController
+from controllers.base_controller import BaseDroneController
 import numpy as np
 
 class SampleDroneController(BaseDroneController):

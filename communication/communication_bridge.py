@@ -109,3 +109,11 @@ class MockLoRaTransceiver:
         import random
         self.snr = 10 + random.randint(-2, 2)
         return self.snr
+    
+    def poll(self, timeout=0.1):
+        """Check if there are messages available (simulating LoRa poll)."""
+        return self.pipe.poll(timeout)
+    
+    def recv(self):
+        """Receive message from pipe (simulating LoRa reception)."""
+        return self.pipe.recv()

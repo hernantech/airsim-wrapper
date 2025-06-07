@@ -9,8 +9,8 @@ import time
 import signal
 import sys
 import os
-from communication_bridge import CommunicationBridge, MockLoRaTransceiver
-from sample_controller import SampleDroneController
+from communication.communication_bridge import CommunicationBridge, MockLoRaTransceiver
+from controllers.sample_controller import SampleDroneController
 
 def run_drone_controller(drone_name, pipe_connection, data_dir):
     """Run a single drone controller in its own process."""

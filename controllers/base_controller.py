@@ -45,15 +45,33 @@ class BaseDroneController(ABC):
         print(f"Initialized {self.drone_name} controller")
     
     def get_rgb_image(self):
-        """Get RGB image from front camera."""
+        """Get high-quality RGB image from front camera."""
         responses = self.client.simGetImages([
-            airsim.ImageRequest("rgb_front", airsim.ImageType.Scene, False, False)
+            airsim.ImageRequest("rgb_front", airsim.ImageType.Scene, False, False)  # Use uncompressed format
         ], vehicle_name=self.drone_name)
         
         if responses:
             response = responses[0]
-            img1d = np.frombuffer(response.image_data_uint8, dtype=np.uint8)
-            img_rgb = img1d.reshape(response.height, response.width, 3)
+            if response.pixels_as_float:
+                # Handle float images (higher dynamic range)
+                img1d = np.array(response.image_data_float, dtype=np.float32)
+                expected_size = response.height * response.width * 3
+                if len(img1d) != expected_size:
+                    print(f"Warning: Float image size mismatch. Expected: {expected_size}, Got: {len(img1d)}")
+                    print(f"Dimensions: {response.height}x{response.width}, Float array size: {len(img1d)}")
+                    return None
+                img_rgb = img1d.reshape(response.height, response.width, 3)
+                # Convert from float [0,1] to uint8 [0,255] with better contrast
+                img_rgb = np.clip(img_rgb * 255.0, 0, 255).astype(np.uint8)
+            else:
+                # Handle uint8 images
+                img1d = np.frombuffer(response.image_data_uint8, dtype=np.uint8)
+                expected_size = response.height * response.width * 3
+                if len(img1d) != expected_size:
+                    print(f"Warning: RGB image size mismatch. Expected: {expected_size}, Got: {len(img1d)}")
+                    print(f"Dimensions: {response.height}x{response.width}, Uint8 array size: {len(img1d)}")
+                    return None
+                img_rgb = img1d.reshape(response.height, response.width, 3)
             return img_rgb
         return None
     
@@ -79,6 +97,110 @@ class BaseDroneController(ABC):
             return points
         return None
     
+    def set_camera_orientation(self, camera_name="rgb_front", pitch=0, roll=0, yaw=0):
+        """
+        Set camera orientation during flight.
+        
+        Args:
+            camera_name: Name of the camera (e.g., "rgb_front", "ir_front")
+            pitch: Pitch angle in degrees (-90 to 90, negative = up, positive = down)
+            roll: Roll angle in degrees (-180 to 180, negative = left, positive = right)
+            yaw: Yaw angle in degrees (-180 to 180, negative = left, positive = right)
+        """
+        try:
+            # Convert degrees to radians
+            pitch_rad = np.radians(pitch)
+            roll_rad = np.radians(roll) 
+            yaw_rad = np.radians(yaw)
+            
+            # Create orientation quaternion
+            orientation = airsim.to_quaternion(pitch_rad, roll_rad, yaw_rad)
+            
+            # Set camera pose
+            camera_pose = airsim.Pose(
+                airsim.Vector3r(0, 0, 0),  # Position relative to vehicle
+                orientation
+            )
+            
+            self.client.simSetCameraPose(camera_name, camera_pose, vehicle_name=self.drone_name)
+            print(f"{self.drone_name}: Set {camera_name} orientation to pitch={pitch}°, roll={roll}°, yaw={yaw}°")
+            
+        except Exception as e:
+            print(f"Error setting camera orientation: {e}")
+    
+    def set_camera_fov(self, camera_name="rgb_front", fov_degrees=90):
+        """
+        Set camera field of view.
+        
+        Args:
+            camera_name: Name of the camera
+            fov_degrees: Field of view in degrees (typically 60-120)
+        """
+        try:
+            self.client.simSetCameraFov(camera_name, fov_degrees, vehicle_name=self.drone_name)
+            print(f"{self.drone_name}: Set {camera_name} FOV to {fov_degrees}°")
+        except Exception as e:
+            print(f"Error setting camera FOV: {e}")
+    
+    def get_camera_pose(self, camera_name="rgb_front"):
+        """Get current camera pose."""
+        try:
+            pose = self.client.simGetCameraPose(camera_name, vehicle_name=self.drone_name)
+            # Convert quaternion to Euler angles for easier understanding
+            pitch, roll, yaw = airsim.to_eularian_angles(pose.orientation)
+            return {
+                "position": {"x": pose.position.x_val, "y": pose.position.y_val, "z": pose.position.z_val},
+                "orientation": {"pitch": np.degrees(pitch), "roll": np.degrees(roll), "yaw": np.degrees(yaw)}
+            }
+        except Exception as e:
+            print(f"Error getting camera pose: {e}")
+            return None
+    
+    def point_camera_at_target(self, camera_name="rgb_front", target_position=None, target_drone=None):
+        """
+        Point camera at a specific target position or another drone.
+        
+        Args:
+            camera_name: Name of the camera
+            target_position: Dict with x, y, z coordinates to look at
+            target_drone: Name of another drone to look at
+        """
+        try:
+            # Get current drone position
+            current_state = self.client.getMultirotorState(vehicle_name=self.drone_name)
+            current_pos = current_state.kinematics_estimated.position
+            
+            # Determine target position
+            if target_drone:
+                target_state = self.client.getMultirotorState(vehicle_name=target_drone)
+                target_pos = target_state.kinematics_estimated.position
+                target_position = {"x": target_pos.x_val, "y": target_pos.y_val, "z": target_pos.z_val}
+                print(f"{self.drone_name}: Pointing camera at {target_drone}")
+            elif target_position:
+                print(f"{self.drone_name}: Pointing camera at position {target_position}")
+            else:
+                print("Error: No target specified")
+                return
+            
+            # Calculate vector from camera to target
+            dx = target_position["x"] - current_pos.x_val
+            dy = target_position["y"] - current_pos.y_val  
+            dz = target_position["z"] - current_pos.z_val
+            
+            # Calculate required camera angles
+            # Yaw: horizontal rotation to face target
+            yaw = np.degrees(np.arctan2(dy, dx))
+            
+            # Pitch: vertical angle to look up/down at target
+            horizontal_distance = np.sqrt(dx**2 + dy**2)
+            pitch = np.degrees(np.arctan2(-dz, horizontal_distance))  # Negative because Z up is negative
+            
+            # Set camera orientation
+            self.set_camera_orientation(camera_name, pitch=pitch, roll=0, yaw=yaw)
+            
+        except Exception as e:
+            print(f"Error pointing camera at target: {e}")
+    
     def get_telemetry(self):
         """Get current telemetry data."""
         state = self.client.getMultirotorState(vehicle_name=self.drone_name)
@@ -99,9 +221,9 @@ class BaseDroneController(ABC):
                 "z": state.kinematics_estimated.linear_velocity.z_val
             },
             "orientation": {
-                "pitch": state.kinematics_estimated.orientation.pitch,
-                "roll": state.kinematics_estimated.orientation.roll,
-                "yaw": state.kinematics_estimated.orientation.yaw
+                "pitch": airsim.to_eularian_angles(state.kinematics_estimated.orientation)[0],
+                "roll": airsim.to_eularian_angles(state.kinematics_estimated.orientation)[1],
+                "yaw": airsim.to_eularian_angles(state.kinematics_estimated.orientation)[2]
             },
             "gps": {
                 "lat": gps.gnss.geo_point.latitude,
@@ -136,21 +258,29 @@ class BaseDroneController(ABC):
         return sensor_data
     
     def save_sensor_data(self, sensor_data):
-        """Save sensor data to disk."""
+        """Save sensor data to disk with high quality."""
         timestep = sensor_data["timestep"]
         
-        # Save RGB image
+        # Save RGB image with high quality (keeping raw RGB format for detectnet)
         if sensor_data["rgb"] is not None:
+            # Save raw RGB data directly (no BGR conversion)
+            # This preserves RGB format for detectnet and ML applications
+            
+            # Use high-quality PNG compression
+            compression_params = [cv2.IMWRITE_PNG_COMPRESSION, 1]  # Lower value = better quality
             cv2.imwrite(
                 os.path.join(self.rgb_dir, f"rgb_{timestep:06d}.png"),
-                cv2.cvtColor(sensor_data["rgb"], cv2.COLOR_RGB2BGR)
+                sensor_data["rgb"],
+                compression_params
             )
         
-        # Save IR image
+        # Save IR image with high quality
         if sensor_data["ir"] is not None:
+            compression_params = [cv2.IMWRITE_PNG_COMPRESSION, 1]
             cv2.imwrite(
                 os.path.join(self.ir_dir, f"ir_{timestep:06d}.png"),
-                sensor_data["ir"]
+                sensor_data["ir"],
+                compression_params
             )
         
         # Save LiDAR data
