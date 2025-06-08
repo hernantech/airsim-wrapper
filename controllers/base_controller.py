@@ -4,6 +4,7 @@ import time
 import os
 import cv2
 import json
+import imageio
 from datetime import datetime
 from abc import ABC, abstractmethod
 import threading
@@ -145,12 +146,14 @@ class BaseDroneController(ABC):
     def get_camera_pose(self, camera_name="rgb_front"):
         """Get current camera pose."""
         try:
-            pose = self.client.simGetCameraPose(camera_name, vehicle_name=self.drone_name)
+            camera_info = self.client.simGetCameraInfo(camera_name, vehicle_name=self.drone_name)
+            pose = camera_info.pose
             # Convert quaternion to Euler angles for easier understanding
             pitch, roll, yaw = airsim.to_eularian_angles(pose.orientation)
             return {
                 "position": {"x": pose.position.x_val, "y": pose.position.y_val, "z": pose.position.z_val},
-                "orientation": {"pitch": np.degrees(pitch), "roll": np.degrees(roll), "yaw": np.degrees(yaw)}
+                "orientation": {"pitch": np.degrees(pitch), "roll": np.degrees(roll), "yaw": np.degrees(yaw)},
+                "fov": camera_info.fov
             }
         except Exception as e:
             print(f"Error getting camera pose: {e}")
@@ -263,24 +266,19 @@ class BaseDroneController(ABC):
         
         # Save RGB image with high quality (keeping raw RGB format for detectnet)
         if sensor_data["rgb"] is not None:
-            # Save raw RGB data directly (no BGR conversion)
-            # This preserves RGB format for detectnet and ML applications
-            
-            # Use high-quality PNG compression
-            compression_params = [cv2.IMWRITE_PNG_COMPRESSION, 1]  # Lower value = better quality
-            cv2.imwrite(
+            # Save raw RGB data directly using imageio (preserves RGB format)
+            # This maintains RGB format for detectnet and ML applications
+            imageio.imwrite(
                 os.path.join(self.rgb_dir, f"rgb_{timestep:06d}.png"),
-                sensor_data["rgb"],
-                compression_params
+                sensor_data["rgb"]
             )
         
         # Save IR image with high quality
         if sensor_data["ir"] is not None:
-            compression_params = [cv2.IMWRITE_PNG_COMPRESSION, 1]
-            cv2.imwrite(
+            # Use imageio for consistency with RGB format handling
+            imageio.imwrite(
                 os.path.join(self.ir_dir, f"ir_{timestep:06d}.png"),
-                sensor_data["ir"],
-                compression_params
+                sensor_data["ir"]
             )
         
         # Save LiDAR data

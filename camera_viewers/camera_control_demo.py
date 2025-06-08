@@ -11,7 +11,7 @@ This script demonstrates how to:
 
 import sys
 import os
-sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import time
 import numpy as np
@@ -259,9 +259,9 @@ def interactive_camera_control():
                     if rgb_image is not None:
                         timestamp = int(time.time())
                         filename = f"manual_capture_{timestamp}.png"
-                        import cv2
-                        cv2.imwrite(filename, cv2.cvtColor(rgb_image, cv2.COLOR_RGB2BGR))
-                        print(f"📸 Image saved: {filename}")
+                        import imageio
+                        imageio.imwrite(filename, rgb_image)  # Save RGB directly
+                        print(f"📸 RGB Image saved: {filename}")
                     else:
                         print("✗ Failed to capture image")
                 elif cmd[0] == "status":
